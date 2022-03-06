@@ -1,0 +1,252 @@
+---
+title: "Property Price Prediction"
+author: "Cheuk Fai Martin Chan"
+date: "2021/7/27"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Background
+
+There are various attributes to consider when one buys a property. To name a few, these include location, condition, size, amenities and interior arrangements of the property. All these have different effects on the price of the properties. It has been traditionally difficult to assess together quantitatively. 
+
+With the help of R as the data analytical tool, this Project aims to explore the relationship between these property attributes and the price of the property, and to develop a Machine Learning Algorithm which could provide good price estimates with the inputs of the property attributes. This could help potential buyers to compare properties quantitatively and identify pricing discrepancies. 
+
+# 2.Data
+
+As family relocation to London is under planning, it was originally planned to use data on London property transaction and property attributes for the project. Unfortunately such data would require a lot of data cleaning and wrangling work from various entities such as the government and property agent websites. It is also found out that the data from the online websites are usually in the form of text paragraphs which would require tedious extraction techniques. 
+
+Instead, for the sake of exercise, data “House Sales in King County, USA” (https://www.kaggle.com/harlfoxem/housesalesprediction) was adopted. The data set contains the sale prices of King County / Seattle between May 2014 and May 2015. 
+
+# 3.Method
+
+Basic exploration and checking of the data will first be conducted. Particular trends / relationship of property attributes against prices will be explored through summarisations and plots. 
+
+To build the algorithm, the data will then first be split into training and testing set at a 90/10 ratio. Then, linear regression, random forest and decision tree methods will be used to produce the algorithms. The models will be compared through the measure of Root Mean Square Error and R squared versus the test data.
+
+# 4.The data
+The head of the data looks like this.
+
+```{r data preparation, warning = FALSE, echo = FALSE, message = FALSE}
+##########################################################
+# Install Required packages, download data
+##########################################################
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
+if(!require(tidyr)) install.packages("tidyr", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(ggcorrplot)) install.packages("ggcorrplot", repos = "http://cran.us.r-project.org")
+if(!require(caTools)) install.packages("caTools", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if(!require(party)) install.packages("party", repos = "http://cran.us.r-project.org")
+if(!require(rpart)) install.packages("rpart", repos = "http://cran.us.r-project.org")
+if(!require(rpart.plot)) install.packages("rpart.plot", repos = "http://cran.us.r-project.org")
+if(!require(maptree)) install.packages("maptree", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggcorrplot)
+library(caTools)
+library(randomForest)
+library(party)
+library(rpart)
+library(rpart.plot)
+library(maptree)
+
+# Housing Price dataset:
+# https://www.kaggle.com/harlfoxem/housesalesprediction
+# Data moved to personal github for the sake of the project
+# https://github.com/martinchan127/House-Price-prediction/blob/main/kc_house_data.csv
+
+# dl <- tempfile()
+
+download.file("https://raw.githubusercontent.com/martinchan127/House-Price-prediction/main/kc_house_data.csv", "house_data.csv")
+
+MainData <- read.csv('house_data.csv')
+
+```
+
+```{r data inspection, warning = FALSE}
+# Basic data inspection
+head(MainData)
+
+dim(MainData)     
+str(MainData)     
+summary(MainData)  
+length(MainData)   
+```
+
+
+
+## 4.1 Variables
+The whole data set contains 21,613 observations across 21 variables. The 21 variables are as follows.
+
+- id : ID of the property
+- date : date of transaction
+- price : transaction value of the property. The key dependent variable in the project.
+- Size related variables:sqft_living, sqft_lot, sqft_above, sqft_basement
+- Condition related variables: condition, grade, yr_built, yr_renovated
+- Location related variables: zipcode, lat, long
+- Interior related variables: bedrooms, bathrooms, floors
+- Others: View, waterfront
+
+The correlation of the parameters are as shown as follows.
+
+```{r correlation, warning = FALSE, echo = FALSE}
+# Correlation
+corr = round(cor(MainData[-2]),3)
+head(corr)
+ggcorrplot(corr, type = "lower",
+           lab = TRUE, lab_size = 2.5) 
+```
+
+The plots on the numerical variables are as follows.
+```{r data plots, warning = FALSE, echo = FALSE}
+options(repr.plot.width = 12, repr.plot.height = 6)
+
+contVars <- c("price", "sqft_living", "sqft_lot", "sqft_above", "sqft_basement", "sqft_living15", "sqft_lot15")
+forplot <- MainData[,contVars]
+forplot <- as.data.frame(melt(forplot))
+
+p <- ggplot(forplot , aes(value)) +
+  geom_density(aes(fill = variable)) +
+  facet_wrap(~variable, scales = "free") +
+  labs(x = "", y = "", fill = "") +
+  theme_minimal() +
+  theme(text = element_text(face = "bold"),
+        legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.title = element_text(hjust = 0.5))
+
+p 
+```
+
+It is noted that some variables are highly correlated and that they could not be brought forward together in constructing the prediction algorithm.
+
+# 5. Algorithm Construction
+
+## 5.1 Data trimming
+As we are targeting houses with bedrooms and bathrooms as a family, entries without bedrooms / bathrooms (either actually or just data entry problems) are eliminated from the data set. Furthermore, variables such as id, lat, long, sqft_living15 and sqftt_lot15 are omitted due to either redundancy or limited relationship with the house price as shown in the correlation chart. While date of transaction might affect price due to economic cycle / inflation, it is also omitted in this case due to the short time horizon of the data.
+
+```{r data trimming, warning = FALSE}
+# Data Preparation
+sum(is.na(MainData)) 
+
+# Data trimming for better handling
+ModelData <- subset(MainData, select=-c(id,date,lat,long,sqft_living15,sqft_lot15))
+ModelData <- ModelData[-which(ModelData$bedrooms == 0),]
+ModelData <- ModelData[-which(ModelData$bathrooms == 0),]
+
+```
+
+## 5.1 Training set and Testing set
+Training set and Testing set occupies 90% and 10% of the data respectively. The sets now contains 15 variables on 18731 and 2882 observations respectively.
+
+```{r data splitting, warning = FALSE}
+## Split training/test data with caTools
+split <- sample.split(ModelData, SplitRatio = 0.9) 
+split
+
+traindata <- subset(ModelData, split == "TRUE") 
+testdata <- subset(ModelData, split == "FALSE")
+
+dim(traindata)
+dim(testdata)
+```
+
+## 5.2 Construction of assessment functions
+RMSE and R_squared calculations are set up as follows.
+```{r RMSE Rsq, warning = FALSE}
+# Construction of RMSE Function, R_sq function
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+
+R_sq <- function(true, predicted, df){
+  SSE <- sum((predicted - true)^2)
+  SST <- sum((true - mean(true))^2)
+  1 - SSE / SST
+}
+```
+
+## 5.3 Linear Regression Model
+Linear Regression is attempted on all the attributes with the result as follows.
+
+```{r M1, warning = FALSE}
+# Regression Model
+lr_model = lm(price~., data = traindata)
+summary(lr_model)
+
+lr_predict_test = predict(lr_model,testdata[,-1])
+
+result <- tibble(Method = "M1 - Linear Regression", 
+                 RMSE = RMSE(testdata$price, lr_predict_test ), 
+                 R2 = R_sq(testdata$price, 
+                           lr_predict_test,testdata[,-1]))
+
+result %>% knitr::kable()
+```
+
+## 5.4 Decision Tree
+Decision Tree is constructed with the result as follows.
+```{r M2, warning = FALSE}
+# Decision Tree
+dt_model <- rpart(price ~ .,data= traindata, method= "anova",
+                  control=list(maxdepth = 4))
+
+
+rpart.plot(dt_model,cex = 0.6)
+
+dt_predict_test = predict(dt_model,testdata[,-1])
+
+result <- bind_rows(result, tibble(Method = "M2 - Decision Tree", 
+                                   RMSE = RMSE(testdata$price, dt_predict_test),
+                                   R2 = R_sq(testdata$price,
+                                             dt_predict_test,testdata[,-1])))
+
+result %>% knitr::kable()
+```
+
+## 5.5 Random Forest
+Finally, Random Forest technique is attempted with number of trees set as 100.
+
+```{r M3, warning = FALSE}
+# Random Forest
+set.seed(1234)
+
+rf_house_price <- randomForest(x = traindata[,-1], 
+                               y = as.vector(traindata$price), 
+                               ntree = 100,  
+                               mtry = round(length(colnames(traindata))/3), 
+                               importance = TRUE)
+
+
+rf_predict_test <- predict(object = rf_house_price, 
+                              newdata = testdata[,-1])
+
+result <- bind_rows(result, tibble(Method = "M3 - Random Forest", 
+                           RMSE = RMSE(testdata$price, rf_predict_test), 
+                           R2 = R_sq(testdata$price,
+                                     rf_predict_test,testdata[,-1])))
+
+result %>% knitr::kable()
+```
+
+# 6.Conclusion
+The Random Forest performs the best with the lowest RMSE and highest R squared among the tested models. In addition to the ability to handle non-linearity, random forest is a more vigorous algorithm than Decision Tree as it could produce more reliable results when the data set is not too large and time is enough for RF to process trees in parallel. 
+
+The assessment could be further improved if the dataset span over 5-10 years in which the time effect will be more apparent. On the other hand, the price data could be converted into price per square feet data such that the exercise could focus on the non-size related attributes such as locations and decorations / year of completions. 
+
+ENDS
+
